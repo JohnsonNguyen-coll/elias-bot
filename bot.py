@@ -185,17 +185,12 @@ async def setup_webhook():
         logging.warning("WEBHOOK_URL not set. Webhook configuration skipped.")
 
 if __name__ == "__main__":
-    # Start Web Server
-    # Note: application.initialize() must be called in an async context if needed, 
-    # but application.bot is available.
-    
     async def main():
+        """Initialize and start the background tasks before the web server"""
         await application.initialize()
         await setup_webhook()
-        # We use a separate task for Flask or run it traditionally.
-        # For simplicity on Render, Flask's app.run is fine.
-        
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+        # Flask runs in the main thread and blocks
+        app.run(host="0.0.0.0", port=PORT)
     
-    app.run(host="0.0.0.0", port=PORT)
+    # asyncio.run is the modern way to run the main async entry point
+    asyncio.run(main())
