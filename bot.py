@@ -127,8 +127,7 @@ def format_pair(pair: dict) -> str:
         f"📊 *Volume 24h:* `{format_number(volume_24h)}`\n"
         f"💧 *Thanh khoản:* `{format_number(liquidity)}`\n"
         f"🏷 *FDV:* `{format_number(fdv)}`\n\n"
-        f"📄 *CA:* `{ca}`\n\n"
-        f"🔗 [Xem trên DexScreener]({url})"
+        f"📄 *CA:* `{ca}`"
     )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
