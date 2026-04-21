@@ -10,8 +10,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL") # URL từ Render, VD: https://your-app.onrender.com
-PORT = int(os.environ.get("PORT", 5000))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
+PORT = int(os.environ.get("PORT", 10000)) # Render thường dùng 10000
 
 # Setup logging
 logging.basicConfig(
@@ -152,7 +152,6 @@ async def ca_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- FLASK & WEBHOOK SETUP ---
 app = Flask(__name__)
-# Initialize application using standard Builder
 application = ApplicationBuilder().token(TOKEN).build()
 
 # Register handlers
@@ -163,34 +162,38 @@ for cmd in SHORTCUTS.keys():
     application.add_handler(CommandHandler(cmd, shortcut_handler))
 
 @app.route("/webhook", methods=["POST"])
-async def webhook():
-    """Handle incoming Telegram updates via Webhook"""
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        # Process update asynchronously
-        await application.process_update(update)
-        return "OK", 200
+def webhook():
+    """Handle incoming Telegram updates via bridge loop"""
+    data = request.get_json(force=True)
+    update = Update.de_json(data, application.bot)
+    
+    # Dùng event loop đã được set làm loop chính của thread này
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(application.process_update(update))
+    return "OK", 200
 
 @app.route("/")
 def index():
     return "Bot is running with Webhook!", 200
 
 async def setup_webhook():
-    """Configure Webhook with Telegram"""
     if WEBHOOK_URL:
         webhook_path = f"{WEBHOOK_URL.rstrip('/')}/webhook"
         await application.bot.set_webhook(url=webhook_path)
         logging.info(f"Webhook set to: {webhook_path}")
     else:
-        logging.warning("WEBHOOK_URL not set. Webhook configuration skipped.")
+        logging.warning("WEBHOOK_URL not set.")
 
 if __name__ == "__main__":
     async def main():
-        """Initialize and start the background tasks before the web server"""
         await application.initialize()
+        await application.start() # Cần thiết khi dùng custom bridge
         await setup_webhook()
-        # Flask runs in the main thread and blocks
-        app.run(host="0.0.0.0", port=PORT)
     
-    # asyncio.run is the modern way to run the main async entry point
-    asyncio.run(main())
+    # Khởi tạo event loop mới
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(main())
+    
+    # Chạy Flask (blocking)
+    app.run(host="0.0.0.0", port=PORT)
