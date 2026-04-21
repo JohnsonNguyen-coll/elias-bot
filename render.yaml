@@ -2,7 +2,7 @@ services:
   - type: web
     name: meme-bot
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt --upgrade
     startCommand: python bot.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
@@ -10,4 +10,4 @@ services:
       - key: WEBHOOK_URL
         sync: false
       - key: PORT
-        value: 5000
+        value: 10000
