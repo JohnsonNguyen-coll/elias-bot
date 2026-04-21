@@ -201,8 +201,7 @@ if __name__ == "__main__":
         await application.start()
         await setup_webhook()
 
-    # Define main_loop globally so it's accessible in webhook()
-    global main_loop
+    # Khởi tạo event loop
     main_loop = asyncio.new_event_loop()
     asyncio.set_event_loop(main_loop)
     main_loop.run_until_complete(main())
