@@ -2,6 +2,7 @@ import os
 import httpx
 import logging
 import asyncio
+import threading
 from dotenv import load_dotenv
 from flask import Flask, request
 from telegram import Update
@@ -11,7 +12,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
-PORT = int(os.environ.get("PORT", 10000)) # Render thường dùng 10000
+PORT = int(os.environ.get("PORT", 10000))
 
 # Setup logging
 logging.basicConfig(
@@ -29,6 +30,9 @@ SHORTCUTS = {
     "moncock": "0x405b6330e213DED490240CbcDD64790806827777",
     "shramp": "0x42a4aA89864A794dE135B23C6a8D2E05513d7777",
 }
+
+# Variable to hold the event loop
+main_loop = None
 
 # --- DEXSCREENER LOGIC ---
 async def search_token_on_dex(query: str):
@@ -109,7 +113,7 @@ def format_pair(pair: dict) -> str:
 # --- BOT HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🚀 *Meme Coin Price Bot (Webhook)*\n\n"
+        "🚀 *Meme Coin Price Bot (Threaded Webhook)*\n\n"
         "📌 *Lệnh:* /p <coin>, /ca <address>\n"
         "⚡️ *Lệnh tắt:* /bob, /anago, /chog, /emonad, /nads, /moncock, /shramp"
     )
@@ -163,18 +167,25 @@ for cmd in SHORTCUTS.keys():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Handle incoming Telegram updates via bridge loop"""
+    """Handle updates by sending them to the main thread event loop"""
     data = request.get_json(force=True)
     update = Update.de_json(data, application.bot)
     
-    # Dùng event loop đã được set làm loop chính của thread này
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(application.process_update(update))
+    # Send coroutine to main thread loop
+    future = asyncio.run_coroutine_threadsafe(
+        application.process_update(update), main_loop
+    )
+    # Wait for result with timeout
+    try:
+        future.result(timeout=30)
+    except Exception as e:
+        logging.error(f"Error processing update: {e}")
+        
     return "OK", 200
 
 @app.route("/")
 def index():
-    return "Bot is running with Webhook!", 200
+    return "Bot is running with Threaded Webhook!", 200
 
 async def setup_webhook():
     if WEBHOOK_URL:
@@ -187,13 +198,25 @@ async def setup_webhook():
 if __name__ == "__main__":
     async def main():
         await application.initialize()
-        await application.start() # Cần thiết khi dùng custom bridge
+        await application.start()
         await setup_webhook()
-    
-    # Khởi tạo event loop mới
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(main())
-    
-    # Chạy Flask (blocking)
-    app.run(host="0.0.0.0", port=PORT)
+
+    # Define main_loop globally so it's accessible in webhook()
+    global main_loop
+    main_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(main_loop)
+    main_loop.run_until_complete(main())
+
+    # Run Flask in a separate daemon thread
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host="0.0.0.0", port=PORT)
+    )
+    flask_thread.daemon = True
+    flask_thread.start()
+    logging.info(f"Flask thread started on port {PORT}")
+
+    # Keep the main thread alive for the event loop
+    try:
+        main_loop.run_forever()
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Shutting down bot...")
