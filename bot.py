@@ -27,9 +27,44 @@ SHORTCUTS = {
     "shramp": "0x42a4aA89864A794dE135B23C6a8D2E05513d7777",
 }
 
-# --- DEXSCREENER LOGIC ---
+# Mapping tên chain người dùng nhập → ID trên DexScreener
+CHAIN_MAP = {
+    "eth": "ethereum",
+    "ethereum": "ethereum",
+    "sol": "solana",
+    "solana": "solana",
+    "base": "base",
+    "monad": "monad",
+}
+
+# Keywords tìm kiếm theo từng chain — càng nhiều càng tốt để vét được nhiều token
+CHAIN_SEARCH_KEYWORDS = {
+    "ethereum": [
+        "pepe", "shib", "floki", "meme", "wojak", "chad", "doge",
+        "turbo", "apu", "landwolf", "inu", "cat", "toad", "bob",
+        "higher", "skull", "mog", "hpos10i", "resistance dog",
+    ],
+    "solana": [
+        "bonk", "wif", "popcat", "goat", "neiro", "mew", "slerf",
+        "bome", "myro", "wen", "samo", "pnut", "giga", "retardio",
+        "ponke", "michi", "ai16z", "fartcoin", "zerebro", "shoggoth",
+    ],
+    "monad": [
+        "chog", "nads", "bob", "shmon", "monad", "MON", "ape",
+        "moncock", "shramp", "anago", "emonad", "meme", "cat",
+    ],
+}
+
+# Symbols bị loại (stablecoin, wrapped token, native coin)
+IGNORE_SYMBOLS = {
+    "USDT", "USDC", "WETH", "WBTC", "WMON", "DAI", "BUSD", "AUSD",
+    "ETH", "MON", "SOL", "WSOL", "WBNB", "BNB", "MATIC", "WMATIC",
+    "USDE", "FRAX", "TUSD", "USDP", "GUSD", "LUSD", "MIM",
+}
+
+
+# --- DEXSCREENER LOGIC (GIỮ NGUYÊN) ---
 async def search_token_on_dex(query: str):
-    # Hạn chế spam API
     await asyncio.sleep(0.5)
     url = f"https://api.dexscreener.com/latest/dex/search?q={query}"
     async with httpx.AsyncClient() as client:
@@ -38,7 +73,6 @@ async def search_token_on_dex(query: str):
             data = res.json()
             pairs = data.get("pairs", [])
             if not pairs: return None
-            # Lấy pair có volume cao nhất
             pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
             return pairs[0]
         except Exception as e:
@@ -46,7 +80,6 @@ async def search_token_on_dex(query: str):
             return None
 
 async def get_token_by_ca(ca: str):
-    # Hạn chế spam API
     await asyncio.sleep(0.5)
     url = f"https://api.dexscreener.com/latest/dex/tokens/{ca}"
     async with httpx.AsyncClient() as client:
@@ -55,7 +88,6 @@ async def get_token_by_ca(ca: str):
             data = res.json()
             pairs = data.get("pairs", [])
             if not pairs: return None
-            # Lấy pair có volume cao nhất
             pairs.sort(key=lambda x: float(x.get("volume", {}).get("h24", 0) or 0), reverse=True)
             return pairs[0]
         except Exception as e:
@@ -116,17 +148,124 @@ def format_pair(pair: dict) -> str:
         f"📄 *CA:* `{ca}`"
     )
 
+
+# --- LEADERBOARD LOGIC (ĐÃ CẢI TIẾN) ---
+
+async def fetch_pairs_by_keyword(client: httpx.AsyncClient, keyword: str, chain: str) -> list:
+    """Tìm kiếm 1 keyword, trả về list pair đúng chain."""
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/search?q={keyword}"
+        res = await client.get(url, timeout=10)
+        if res.status_code != 200:
+            return []
+        data = res.json()
+        pairs = data.get("pairs") or []
+        return [p for p in pairs if p.get("chainId", "").lower() == chain.lower()]
+    except Exception as e:
+        logging.error(f"[leaderboard] Keyword '{keyword}' lỗi: {e}")
+        return []
+
+async def get_top_tokens_dexscreener(chain: str, limit: int = 10):
+    """
+    Lấy top meme tokens theo market cap cho chain cho trước.
+    Trả về (list_pairs, error_message).
+    """
+    keywords = CHAIN_SEARCH_KEYWORDS.get(chain.lower(), [chain])
+    pairs_all = []
+
+    async with httpx.AsyncClient() as client:
+        # Gọi song song tất cả keywords để nhanh hơn
+        tasks = [fetch_pairs_by_keyword(client, kw, chain) for kw in keywords]
+        results = await asyncio.gather(*tasks)
+        for batch in results:
+            pairs_all.extend(batch)
+
+    if not pairs_all:
+        return None, (
+            f"Không tìm thấy token nào trên chain `{chain}`.\n"
+            f"Monad cần có ít nhất 1 DEX active trên DexScreener."
+        )
+
+    # Lọc stablecoin / wrapped token
+    pairs_all = [
+        p for p in pairs_all
+        if p.get("baseToken", {}).get("symbol", "").upper() not in IGNORE_SYMBOLS
+    ]
+
+    # Lọc token có thanh khoản quá thấp (< $1000) để tránh rác
+    pairs_all = [
+        p for p in pairs_all
+        if float((p.get("liquidity") or {}).get("usd") or 0) >= 1_000
+    ]
+
+    # Ưu tiên marketCap, fallback sang fdv nếu không có
+    def get_mcap(p):
+        return float(p.get("marketCap") or p.get("fdv") or 0)
+
+    pairs_all.sort(key=get_mcap, reverse=True)
+
+    # Dedup theo contract address (giữ pair có mcap cao nhất)
+    seen_addr = set()
+    unique = []
+    for p in pairs_all:
+        addr = p.get("baseToken", {}).get("address", "").lower()
+        if addr and addr not in seen_addr:
+            seen_addr.add(addr)
+            unique.append(p)
+
+    return unique[:limit], None
+
+
+def format_leaderboard(results: list, chain: str) -> str:
+    chain_display = {
+        "ethereum": "Ethereum 🔷",
+        "solana": "Solana 🟣",
+        "base": "Base 🔵",
+        "monad": "Monad 🟣",
+    }.get(chain.lower(), chain.upper())
+
+    medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    lines = [f"🏆 *Top 10 Meme — {chain_display}*\n"]
+
+    for i, p in enumerate(results):
+        base = p.get("baseToken", {})
+        name = base.get("name", "Unknown")
+        symbol = base.get("symbol", "???")
+
+        price_usd  = p.get("priceUsd")
+        mcap       = p.get("marketCap") or p.get("fdv") or 0
+        vol_24h    = (p.get("volume") or {}).get("h24") or 0
+        liquidity  = (p.get("liquidity") or {}).get("usd") or 0
+        change_24h = (p.get("priceChange") or {}).get("h24") or 0
+
+        try:
+            chg = float(change_24h)
+            chg_str = f"{'🟢' if chg > 0 else '🔴'} `{chg:+.1f}%`"
+        except:
+            chg_str = "⚪ `N/A`"
+
+        medal = medals[i] if i < len(medals) else "🔹"
+        lines.append(
+            f"{medal} *{name}* (${symbol})\n"
+            f"   💵 `{format_price(price_usd)}`  {chg_str}\n"
+            f"   🏷 MCap: `{format_number(mcap)}`  "
+            f"📊 Vol: `{format_number(vol_24h)}`  "
+            f"💧 Liq: `{format_number(liquidity)}`\n"
+        )
+    return "\n".join(lines)
+
+
 # --- BOT HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🚀 *Meme Coin Price Bot*\n\n"
         "📌 *Lệnh:*\n"
         "/p `<tên coin>` — Check giá\n"
-        "/ca `<contract address>` — Check theo CA\n\n"
+        "/ca `<contract address>` — Check theo CA\n"
+        "/leaderboard `<chain>` — Top 10 meme (eth, sol, monad)\n\n"
         "💡 *Ví dụ:*\n"
         "/p PEPE\n"
-        "/p bonk\n"
-        "/ca 0xabc...123\n\n"
+        "/leaderboard sol\n\n"
         "⚡️ *Lệnh tắt:* /bob, /anago, /chog, /emonad, /nads, /moncock, /shramp"
     )
     await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
@@ -166,26 +305,53 @@ async def ca_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await msg.edit_text(format_pair(pair), parse_mode="Markdown", disable_web_page_preview=True)
 
+async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.info(f"[leaderboard] Nhận lệnh từ {update.message.from_user.username}, args={context.args}")
+
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ Dùng: `/leaderboard <chain>`\n"
+            "✅ Chain hỗ trợ: `eth`, `sol`, `monad`\n\n"
+            "Ví dụ: `/leaderboard sol`",
+            parse_mode="Markdown"
+        )
+        return
+
+    chain_input = context.args[0].lower()
+    chain = CHAIN_MAP.get(chain_input)
+
+    if not chain:
+        await update.message.reply_text(
+            f"❌ Chain `{chain_input}` không hỗ trợ.\n"
+            f"✅ Dùng: `eth`, `sol`, `monad`",
+            parse_mode="Markdown"
+        )
+        return
+
+    msg = await update.message.reply_text(
+        f"⏳ Đang tải top 10 meme trên *{chain_input.upper()}*...",
+        parse_mode="Markdown"
+    )
+
+    results, error = await get_top_tokens_dexscreener(chain)
+
+    if error or not results:
+        await msg.edit_text(f"❌ {error or 'Không có dữ liệu.'}", parse_mode="Markdown")
+        return
+
+    text = format_leaderboard(results, chain)
+    await msg.edit_text(text, parse_mode="Markdown", disable_web_page_preview=True)
+
+
 if __name__ == "__main__":
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("p", price_command))
     application.add_handler(CommandHandler("ca", ca_command))
+    application.add_handler(CommandHandler("leaderboard", leaderboard_command))
     for cmd in SHORTCUTS.keys():
         application.add_handler(CommandHandler(cmd, shortcut_handler))
 
     logging.info("Bot starting in POLLING mode...")
-    
-    # Xóa webhook cũ nếu còn tồn tại để tránh lỗi Conflict 409
-    import asyncio
-    async def run_bot():
-        await application.initialize()
-        await application.bot.delete_webhook(drop_pending_updates=True)
-        await application.updater.start_polling(drop_pending_updates=True)
-        await application.start()
-
-    # Lưu ý: run_polling() làm tất cả những việc trên, nhưng đôi khi gặp lỗi Conflict 
-    # nếu webhook chưa được xóa sạch. Ta dùng drop_pending_updates=True trực tiếp trong run_polling.
     application.run_polling(drop_pending_updates=True)
