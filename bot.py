@@ -25,6 +25,7 @@ SHORTCUTS = {
     "nads": "0x39B9E06f226FF6D7500c870B82333AACbD2F7777",
     "moncock": "0x405b6330e213DED490240CbcDD64790806827777",
     "shramp": "0x42a4aA89864A794dE135B23C6a8D2E05513d7777",
+    "molandak": "0x7B2728c04aD436153285702e969e6EfAc3a97777",
 }
 
 # Mapping tên chain người dùng nhập → ID trên DexScreener
@@ -51,7 +52,7 @@ CHAIN_SEARCH_KEYWORDS = {
     ],
     "monad": [
         "chog", "nads", "bob", "shmon", "monad", "MON", "ape",
-        "moncock", "shramp", "anago", "emonad", "meme", "cat",
+        "moncock", "shramp", "anago", "emonad", "meme", "cat", "molandak",
     ],
 }
 
@@ -266,7 +267,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💡 *Ví dụ:*\n"
         "/p PEPE\n"
         "/leaderboard sol\n\n"
-        "⚡️ *Lệnh tắt:* /bob, /anago, /chog, /emonad, /nads, /moncock, /shramp"
+        "⚡️ *Lệnh tắt:* /bob, /anago, /chog, /emonad, /nads, /moncock, /shramp, /molandak"
     )
     await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
 
